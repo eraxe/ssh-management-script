@@ -2,20 +2,33 @@
 
 CONFIG_DIR="$HOME/.ssh"
 CONFIG_FILE="$CONFIG_DIR/servers"
-PASSWORD_FILE="$CONFIG_DIR/.server_credentials"
+PASSWORD_FILE="$CONFIG_DIR/.server_credentials.gpg"
 LOG_FILE="$HOME/ssh_management_script.log"
+GPG_PASSPHRASE="your_gpg_passphrase"  # Set your GPG passphrase here
 
 # Ensure required directories and files exist
 mkdir -p "$CONFIG_DIR"
 touch "$CONFIG_FILE"
-touch "$PASSWORD_FILE"
-chmod 600 "$PASSWORD_FILE"
+[ ! -f "$PASSWORD_FILE" ] && echo " " | gpg --batch --yes --passphrase "$GPG_PASSPHRASE" -c -o "$PASSWORD_FILE"
 
 # Check if sshpass is installed
 if ! command -v sshpass &> /dev/null; then
     echo "sshpass could not be found, please install it."
     exit 1
 fi
+
+# Function to decrypt password file
+decrypt_password_file() {
+    gpg --batch --yes --passphrase "$GPG_PASSPHRASE" -d "$PASSWORD_FILE" 2>/dev/null
+}
+
+# Function to encrypt password file
+encrypt_password_file() {
+    local temp_file=$(mktemp)
+    cat > "$temp_file"
+    gpg --batch --yes --passphrase "$GPG_PASSPHRASE" -c -o "$PASSWORD_FILE" "$temp_file"
+    rm -f "$temp_file"
+}
 
 # Function to add a new server
 add_server() {
@@ -25,8 +38,10 @@ add_server() {
     read -s -p "Enter server password: " server_password
     echo
     echo "$server_name:$server_ip:$username" >> "$CONFIG_FILE"
-    echo "$server_name:$server_password" >> "$PASSWORD_FILE"
-    chmod 600 "$PASSWORD_FILE"
+    decrypt_password_file > temp_password_file
+    echo "$server_name:$server_password" >> temp_password_file
+    encrypt_password_file < temp_password_file
+    rm temp_password_file
     echo "$(date) - Added server: $server_name" >> "$LOG_FILE"
 }
 
@@ -59,7 +74,7 @@ edit_server() {
 
     server_ip=$(awk -F: -v name="$server_name" '$1 == name {print $2}' "$CONFIG_FILE")
     username=$(awk -F: -v name="$server_name" '$1 == name {print $3}' "$CONFIG_FILE")
-    server_password=$(awk -F: -v name="$server_name" '$1 == name {print $2}' "$PASSWORD_FILE")
+    server_password=$(decrypt_password_file | awk -F: -v name="$server_name" '$1 == name {print $2}')
 
     if [ -z "$server_ip" ]; then
         echo "Server not found!"
@@ -73,7 +88,10 @@ edit_server() {
     echo
 
     sed -i "/^$server_name:/c\\$server_name:$new_server_ip:$new_username" "$CONFIG_FILE"
-    sed -i "/^$server_name:/c\\$server_name:$new_server_password" "$PASSWORD_FILE"
+    decrypt_password_file > temp_password_file
+    sed -i "/^$server_name:/c\\$server_name:$new_server_password" temp_password_file
+    encrypt_password_file < temp_password_file
+    rm temp_password_file
 
     echo "$(date) - Edited server: $server_name" >> "$LOG_FILE"
 }
@@ -100,12 +118,13 @@ delete_server() {
     fi
 
     sed -i "/^$server_name:/d" "$CONFIG_FILE"
-    sed -i "/^$server_name:/d" "$PASSWORD_FILE"
+    decrypt_password_file > temp_password_file
+    sed -i "/^$server_name:/d" temp_password_file
+    encrypt_password_file < temp_password_file
+    rm temp_password_file
 
     echo "$(date) - Deleted server: $server_name" >> "$LOG_FILE"
 }
-
-# Function to connect to a server
 connect_server() {
     local servers=()
     while IFS= read -r line; do
@@ -128,7 +147,7 @@ connect_server() {
 
     server_ip=$(awk -F: -v name="$server_name" '$1 == name {print $2}' "$CONFIG_FILE")
     username=$(awk -F: -v name="$server_name" '$1 == name {print $3}' "$CONFIG_FILE")
-    server_password=$(awk -F: -v name="$server_name" '$1 == name {print $2}' "$PASSWORD_FILE")
+    server_password=$(decrypt_password_file | awk -F: -v name="$server_name" '$1 == name {print $2}')
 
     if [ -z "$server_ip" ]; then
         echo "Server not found!"
@@ -178,7 +197,7 @@ copy_current_key() {
 
     server_ip=$(awk -F: -v name="$server_name" '$1 == name {print $2}' "$CONFIG_FILE")
     username=$(awk -F: -v name="$server_name" '$1 == name {print $3}' "$CONFIG_FILE")
-    server_password=$(awk -F: -v name="$server_name" '$1 == name {print $2}' "$PASSWORD_FILE")
+    server_password=$(decrypt_password_file | awk -F: -v name="$server_name" '$1 == name {print $2}')
 
     if [ -z "$server_ip" ]; then
         echo "Server not found!"
@@ -223,7 +242,7 @@ else
             edit_server
             ;;
         -d|--delete)
-	    delete_server
+            delete_server
             ;;
         -l|--list-servers)
             list_servers
